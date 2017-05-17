@@ -1,0 +1,22 @@
+library(tm)
+library(SnowballC)
+library(wordcloud)
+library(RColorBrewer)
+library(data.table);
+library(stringi);
+
+document = fread("casa.txt", sep = "\n");
+text = data.frame(words = unlist(stri_extract_all_words(stri_trans_tolower(document))))
+textCorpus = Corpus(VectorSource(document))
+textCorpus = tm_map(textCorpus, PlainTextDocument)
+textCorpus = tm_map(textCorpus, removePunctuation)
+textCorpus = tm_map(textCorpus, removeWords, stopwords('english'))
+ap.tdm <- TermDocumentMatrix(textCorpus)
+ap.m <- as.matrix(ap.tdm)
+ap.v <- sort(rowSums(ap.m),decreasing=TRUE)
+ap.d <- data.frame(word = names(ap.v),freq=ap.v)
+table(ap.d$freq)
+pal2 <- brewer.pal(8,"Dark2")
+wordcloud(ap.d$word,ap.d$freq, scale=c(2,.7),min.freq=3,
+          max.words=Inf, random.order=FALSE, rot.per=.15, colors=pal2)
+dev.off()
