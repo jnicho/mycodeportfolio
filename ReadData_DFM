@@ -1,0 +1,263 @@
+library(zoo);
+library(data.table);
+library(plyr);
+library(dplyr);
+
+## Function that sets "TRUE" or "FALSE" values for "default" and "prepay" variables
+## based on determination through several logical statements
+
+flagFunction = function(balCheck, MTM, A_UPB, DELINQ, AGE) {
+  result = c(NA,NA,NA,NA,as.integer(tail(AGE,1)));
+  #result[1] = Prepay condition
+  #result[2] = Default condition
+  #result[3] = DPD bucket
+  #result[4] = age bucket (0 = <1 year, 1 = >1 year)
+  #Prepay Condition
+  if(balCheck == 1 && 
+       tail(MTM, 1)>0){
+    result[1] = T;
+  } else { result[1] = F; }
+  #Default Condition
+  if(balCheck == 3 |
+       balCheck == 9 &&
+       (tail(A_UPB, 1)==0)){
+    result[2] = T
+  } else { result[2] = F }
+  #
+  if(tail(DELINQ,1) == "R"){
+    result[3] = -1
+  }
+  #If the loan is 0-29 DPD, flag 0
+  else if(as.integer(tail(DELINQ,1)) == 0 ){
+    result[3] = 0;
+  }
+  #If the loan is 30-59 DPD, flag 1
+  else if(as.integer(tail(DELINQ,1)) == 1){
+    result[3] = 1;
+  }
+  #If the loan is 60-89 DPD, flag 2
+  else if(as.integer(tail(DELINQ,1)) == 2){
+    result[3] = 2;
+  }
+  #If the loan is 90-150 DPD, flag 3
+  else if(as.integer(tail(DELINQ,1)) == 3 | as.integer(tail(DELINQ,1)) == 4){
+    result[3] = 3;
+  }
+  #If the loan is 150+ flag 4
+  else{
+    result[3] = 4;
+  }
+  #If the loan is less than 1 year old, flag 0
+  if(result[5] < 12){
+    result[4] = 0;
+  }
+  #Otherwise, if the loan is greater than 1 year old flag 1
+  else{
+    result[4] = 1;
+  }
+  return(result);
+}
+## simple function to calculate proportion of defaults by another variable
+proportionFunction = function(balCheck, MTM, A_UPB, DELINQ){
+  tempFull = as.data.frame(cbind(balCheck,MTM,A_UPB,DELINQ));
+  tempDef = subset(tempFull, balCheck == 3 | balCheck == 9 && A_UPB == 0)
+  length(tempDef$balCheck)/length(tempFull$balCheck);
+}
+
+defaultFix = function(default, date){
+  temp = head(default,1);
+  default <<- 0;
+  default[length(default)] <<- temp;
+  return(default);
+}
+
+proportionFunctionOLD = function(DEF){
+  length(DEF[DEF == T])/length(DEF);
+}
+
+## Function to standardize date
+dateStd = function(date){
+  date = as.character(date);
+  date = as.yearmon(date, "%Y-%m-%d")
+  date = as.character(date);
+  return(date);
+}
+
+## Function to easily read in FRED data
+readFRED = function(files){
+  data = NULL;
+  for(fileIter in 1:length(files)){
+    data[[fileIter]] = read.csv(files[fileIter])
+    names(data[[fileIter]])[1] = "DATE";
+    data[[fileIter]]$DATE = dateStd(data[[fileIter]]$DATE)
+  }
+  dataFull = Reduce(function(...) merge(..., all=T), data)
+  rm(data);
+  return(dataFull);
+}
+
+## Setting column names for each data frame
+perfNames = c("LOANSEQ","REP_PERIOD","ACTUAL_UPB","DELINQ","AGE","MONTHS_TO_MATURITY","REPO_FLAG",
+              "MOD_FLAG","ZERO_BAL_CODE","ZERO_BAL_DATE","INT_RATE","DEFERRED_UPB","DDLPI","MI_RECO",
+              "NS_PROC","NON_MI_RECO","EXPENSES");
+origNames = c("CRED_SCORE","FIRST_PAY_DATE","1ST-TIMER_FLAG","MATUR_DATE","MSA","MI%","UNITS",
+              "OCCUP_STATUS","CLTV","ORIG_DTI","ORIG_UPB","ORIG_LTV","ORIG_INT","CHANNEL",
+              "PPM_FLAG","PROD_TYPE","STATE","PROP_TYPE","ZIP","LOANSEQ","PURPOSE","ORIG_TERM",
+              "NUM_BORROW","SELLER","SERVICER");
+
+#setwd("K:/Google Drive/My Projects/Frame's Project/Zips and Data/data/Econ Data");
+
+## Reading in data and fixing column names, uncomment and add if adding more data.
+econData = readFRED(c("HPI.csv","GDP.csv","Unemployment.csv","HPIPCH.csv","GDPPCH.csv",
+                      "UnemploymentPCH.csv")) # For easy addition of indicators.
+econNames = c("DATE","HPI", "GDP", "UNRATE", "HPIPCH", "GDPPCH", "UNRATEPCH");
+names(econData) = econNames;
+econData = read.csv("econData.csv");
+econData$DATE = as.character(econData$DATE)
+econData$DATE = as.yearmon(econData$DATE, "%m/%d/%Y");
+econData$DATE = as.character(econData$DATE)
+
+## Initializing data
+perf = NULL;
+orig=NULL;
+years = 1999:2014
+
+#setwd("K:/Google Drive/My Projects/Frame's Project/Zips and Data/data/Sample Data");
+
+for(readIter in 1:16){
+  perf[[readIter]] = read.table(paste("sample_svcg_",years[readIter],".txt",sep=""), sep="|", fill = T,
+                                stringsAsFactors = F, col.names = perfNames);
+  orig[[readIter]] = read.table(paste("sample_orig_",years[readIter],".txt", sep=""), sep="|", fill = T,
+                                stringsAsFactors = F, col.names = origNames);
+}
+
+## Merging lists into one df and standardizing dates
+perfFull = rbindlist(perf, fill = T);
+perfFull$REP_PERIOD = as.character(perfFull$REP_PERIOD)
+perfFull$REP_PERIOD = as.yearmon(perfFull$REP_PERIOD, "%Y%m");
+perfFull$REP_PERIOD = as.character(perfFull$REP_PERIOD);
+perfFull$REP_PERIOD = as.numeric(perfFull$REP_PERIOD);
+perfFull$REP_PERIOD = format(date_decimal(perfFull$REP_PERIOD),"%b %Y");
+
+origFull = rbindlist(orig, fill = T);
+origFull$FIRST_PAY_DATE = as.character(origFull$FIRST_PAY_DATE);
+origFull$FIRST_PAY_DATE = as.yearmon(origFull$FIRST_PAY_DATE, "%Y%m");
+origFull$FIRST_PAY_DATE = as.character(origFull$FIRST_PAY_DATE);
+origFull$MATUR_DATE = as.character(origFull$MATUR_DATE);
+origFull$MATUR_DATE = as.yearmon(origFull$MATUR_DATE, "%Y%m");
+origFull$MATUR_DATE = as.character(origFull$MATUR_DATE);
+
+
+## Removing unecessary list data
+
+rm(perf);
+rm(orig);
+
+## Adding the economic indicator columns to Performance
+perfFull$HPI = econData[match(as.character(perfFull$REP_PERIOD), as.character(econData$DATE)), "HPI"]
+perfFull$HPIPCH = econData[match(as.character(perfFull$REP_PERIOD), as.character(econData$DATE)), "HPIPCH"]
+perfFull$GDP = econData[match(as.character(perfFull$REP_PERIOD), as.character(econData$DATE)), "GDP"]
+perfFull$GDPPCH = econData[match(as.character(perfFull$REP_PERIOD), as.character(econData$DATE)), "GDPPCH"]
+perfFull$UNRATE = econData[match(as.character(perfFull$REP_PERIOD), as.character(econData$DATE)), "UNRATE"]
+perfFull$UNRATEPCH = econData[match(as.character(perfFull$REP_PERIOD), as.character(econData$DATE)), "UNRATEPCH"]
+
+## Creating lookup table that contains the logical values for
+## "default", "prepay", "days past due" and "age" for each loan using flagFunction
+
+lookupTable = perfFull %>% group_by(LOANSEQ) %>% 
+  summarize(prepay = flagFunction(sum(na.omit(ZERO_BAL_CODE)), MONTHS_TO_MATURITY, ACTUAL_UPB, DELINQ,AGE)[1],
+            default = flagFunction(sum(na.omit(ZERO_BAL_CODE)), MONTHS_TO_MATURITY, ACTUAL_UPB, DELINQ,AGE)[2],
+            dbeforedef = flagFunction(sum(na.omit(ZERO_BAL_CODE)), MONTHS_TO_MATURITY, ACTUAL_UPB, DELINQ,AGE)[3],
+            age = flagFunction(sum(na.omit(ZERO_BAL_CODE)), MONTHS_TO_MATURITY, ACTUAL_UPB, DELINQ,AGE)[4],
+            endDate = tail(REP_PERIOD,1), monthsOld = as.integer(tail(AGE,1)));
+
+CSmean = mean(na.omit(origFull$CRED_SCORE));
+origFull$quadcredit = (origFull$CRED_SCORE - CSmean)^2;
+
+## Creating FICO buckets
+origFull = origFull[!is.na(origFull$CRED_SCORE),];
+origFull$FICOBuck[origFull$CRED_SCORE < 650] = 1
+origFull$FICOBuck[origFull$CRED_SCORE >= 650 & origFull$CRED_SCORE < 700] = 2
+origFull$FICOBuck[origFull$CRED_SCORE >= 700 & origFull$CRED_SCORE < 750] = 3
+origFull$FICOBuck[origFull$CRED_SCORE >= 750] = 4
+
+## Adding "default" and "prepay" flags to full data set from lookup table
+
+perfFull = join(perfFull, lookupTable, by = "LOANSEQ");
+perfFull$REP_PERIOD = as.yearmon(perfFull$REP_PERIOD, "%B %Y");
+perfFull = perfFull[order(perfFull$LOANSEQ, perfFull$REP_PERIOD),]
+origFull = join(origFull, lookupTable, by = "LOANSEQ");
+match = match(paste(perfFull$LOANSEQ, perfFull$REP_PERIOD), 
+              paste(origFull$LOANSEQ, origFull$endDate));
+match[is.na(match)] = 0;
+origFull = origFull[order(origFull$LOANSEQ),]
+origFull = origFull[!is.na(origFull$default),];
+perfFull$default = 0;
+test = which(match != 1);
+perfFull$default[test] = origFull$default[match[test]];
+perfFull = as.data.table(perfFull);
+origFull = as.data.frame(origFull);
+
+fullData = join(perfFull, origFull, by = "LOANSEQ");
+#setwd("K:/Google Drive/My Projects/Frame's Project/Zips and Data/data/Complete Data");
+
+write.csv(perfFull, "perf_data.csv");
+write.csv(origFull, "orig_data.csv");
+write.csv(fullData, "full_data.csv");
+
+## Making time-series table
+dateTable = origFull %>% group_by(endDate) %>% 
+  summarize(FICObuck1 = mean(default[FICOBuck == 1]),
+            FICObuck2 = mean(default[FICOBuck == 2]),
+            FICObuck3 = mean(default[FICOBuck == 3]),
+            FICObuck4 = mean(default[FICOBuck == 4]),
+            DPD0 = mean(default[dbeforedef == 0]),
+            DPD1 = mean(default[dbeforedef == 1]),
+            DPD2 = mean(default[dbeforedef == 2]),
+            DPD3 = mean(default[dbeforedef == 3]),
+            DPD4 = mean(default[dbeforedef == 4]),
+            Age0 = mean(default[age == 0]),
+            Age1 = mean(default[age == 1]))
+
+# No FICO Bucket 1
+dateTableNO1 = origFull %>% group_by(endDate) %>% 
+  summarize(FICObuck2 = mean(default[FICOBuck == 2]),
+            FICObuck3 = mean(default[FICOBuck == 3]),
+            FICObuck4 = mean(default[FICOBuck == 4]),
+            DPD0 = mean(default[dbeforedef == 0]),
+            DPD1 = mean(default[dbeforedef == 1]),
+            DPD2 = mean(default[dbeforedef == 2]),
+            DPD3 = mean(default[dbeforedef == 3]),
+            DPD4 = mean(default[dbeforedef == 4]),
+            Age0 = mean(default[age == 0]),
+            Age1 = mean(default[age == 1]))
+
+# No FICO Buckets 1 or 2
+dateTableNO12 = origFull %>% group_by(endDate) %>% 
+  summarize(FICObuck3 = mean(default[FICOBuck == 3]),
+            FICObuck4 = mean(default[FICOBuck == 4]),
+            DPD0 = mean(default[dbeforedef == 0]),
+            DPD1 = mean(default[dbeforedef == 1]),
+            DPD2 = mean(default[dbeforedef == 2]),
+            DPD3 = mean(default[dbeforedef == 3]),
+            DPD4 = mean(default[dbeforedef == 4]),
+            Age0 = mean(default[age == 0]),
+            Age1 = mean(default[age == 1]))
+            
+dateTable$endDate = as.yearmon(dateTable$endDate)
+dateTable = dateTable[order(dateTable$endDate)];
+dateTable$endDate = as.Date(dateTable$endDate);
+
+dateTableNO1$endDate = as.yearmon(dateTableNO1$endDate)
+dateTableNO1 = dateTableNO1[order(dateTableNO1$endDate)];
+dateTableNO1$endDate = as.Date(dateTableNO1$endDate);
+
+dateTableNO12$endDate = as.yearmon(dateTableNO12$endDate)
+dateTableNO12 = dateTableNO12[order(dateTableNO12$endDate)];
+dateTableNO12$endDate = as.Date(dateTableNO12$endDate);
+
+setwd("K:/Google Drive/My Projects/Frame's Project/Zips and Data/Time Series");
+
+write.table(dateTable, "timeSeries1.txt");
+write.table(dateTableNO1, "timeSeriesNO1.txt");
+write.table(dateTableNO12, "timeSeriesNO12.txt");
