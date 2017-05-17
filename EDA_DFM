@@ -1,0 +1,250 @@
+library(ggplot2);
+library(gridExtra);
+library(grid);
+library(reshape);
+library(scales);
+library(data.table);
+
+origFull = as.data.table(read.table("../Complete Data/orig_data.txt", header = T, stringsAsFactors = F));
+timeSeries = as.data.table(read.table("../Time Series/timeSeries.txt", header = T, stringsAsFactors = F));
+timeSeries$endDate = as.Date(timeSeries$endDate);
+timeSeriesNO1 = as.data.table(read.table("../Time Series/timeSeries1.txt", header = T, stringsAsFactors = F));
+timeSeriesNO12 = as.data.table(read.table("../Time Series/timeSeries2.txt", header = T, stringsAsFactors = F));
+
+## Removing NA values and cleaning data
+origFull = origFull[!is.na(origFull$age),]; 
+origFull = origFull[!is.na(origFull$dbeforedef),]; 
+origFull = origFull[origFull$dbeforedef >= 0,];
+origFull = origFull[!is.na(origFull$CRED_SCORE),];
+origFull$default = as.factor(origFull$default);
+origFull$age = as.factor(origFull$age);
+origFull$dbeforedef = as.factor(origFull$dbeforedef);
+origFull$FICObuck = as.factor(origFull$FICOBuck);
+levels(origFull$default) = c("No default", "Default");
+levels(origFull$age) = c("< 1Yr", "> 1Yr");
+levels(origFull$dbeforedef) = c("0-29 DPD", "30-59 DPD","60-89 DPD", "90-150 DPD", "150+ DPD");
+levels(origFull$FICOBuck) = c("<600","601-650", "651-700", "701-750", "751-800",">801");
+
+## Grouping data by REP_PERIOD and plotting
+
+lookupTable2 = perfFull %>% group_by(REP_PERIOD) %>%
+  summarize(proportion = proportionFunction(ZERO_BAL_CODE, MONTHS_TO_MATURITY, ACTUAL_UPB, DELINQ))
+lookupTable2$REP_PERIOD = as.yearmon(lookupTable2$REP_PERIOD, "%b %Y")
+lookupTable2 = lookupTable2[order(lookupTable2$REP_PERIOD)];
+plot(lookupTable2, main = "Defaults on Origination Data by Month",
+     xlab="Reporting Period",
+     ylab = "Percent of defaulted loans", type = "l")
+
+# Grouping data by FIRST_PAY_DATE
+lookupTable2 = origFull %>% group_by(FIRST_PAY_DATE) %>%
+  summarize(proportion = proportionFunctionOLD(default))
+lookupTable2$FIRST_PAY_DATE = as.yearmon(lookupTable2$FIRST_PAY_DATE, "%b %Y")
+lookupTable2 = lookupTable2[order(lookupTable2$FIRST_PAY_DATE)];
+plot(lookupTable2[1:188,], main = "Defaults on Origination Data by Month",
+     xlab="Month of First Payment",
+     ylab = "Percent of defaulted loans", type = "l")
+
+# Grouping data by HPI and plotting
+
+lookupTable3 = origFull %>% group_by(HPI) %>%
+  summarize(proportion = proportionFunction(default))
+lookupTable3 = lookupTable3[order(lookupTable3$HPI)];
+plot(lookupTable3[lookupTable3$proportion < .9,], main = "Defaults on Origination Data by HPI", 
+     xlab="Case-Shiller Index (HPI)",
+     ylab = "Percent of defaulted loans", type = "l")
+
+# Grouping data by ORIG_INT and plotting
+
+lookupTable4 = origFull %>% group_by(ORIG_INT) %>%
+  summarize(proportion = proportionFunction(default))
+lookupTable4 = lookupTable4[order(lookupTable4$ORIG_INT)];
+plot(lookupTable4[lookupTable4$proportion < .99,], main = "Defaults on Origination Data by Interest Rate", 
+     xlab="Interest Rate",
+     ylab = "Percent of defaulted loans", type = "l")
+
+## Changing directory to output figures
+setwd("K:/Google Drive/My Projects/Frame's Project/Zips and Data/data/Relevant Figures");
+
+# Histograms
+png("DelinquincyHist.png")
+hist(perfFull$dbeforedef[perfFull$dbeforedef>0]*30, xaxt='n', main="Histogram of Days Delinquent Before Default",
+     xlab = "Days Before Delinquency")
+axis(side=1, at=seq(0,2500, 50), labels=seq(0,2500,50))
+dev.off()
+
+png("CredScoreDefault.png")
+hist(origFull$CRED_SCORE[origFull$default == T], main = "Histogram of Default by Credit Score",
+     xlab = "Credit Score", xaxt='n',breaks=30);
+axis(side=1, at=seq(min(origFull$CRED_SCORE,na.rm=T), max(origFull$CRED_SCORE,na.rm=T)+40, 50), 
+     labels=seq(min(origFull$CRED_SCORE,na.rm=T), max(origFull$CRED_SCORE,na.rm=T)+40, 50));
+dev.off();
+
+## Plotting density plots
+# Plotting FICO Scores 
+pdf("DensityPlots.pdf");
+plot = ggplot(origFull, aes(x=CRED_SCORE, fill=default)) + geom_density(alpha=.3);
+plot+facet_grid(age~dbeforedef) + scale_colour_manual(values=c("green", "blue"))+ 
+  labs(x="Credit Score") + ggtitle("Density Plot for FICO Scores by Age and Delinquency Status") + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1));
+
+# Plotting LTV (26 NA values)
+plot = ggplot(origFull, aes(x=ORIG_LTV, fill=default)) + geom_density(alpha=.3);
+plot+facet_grid(age~dbeforedef) + scale_colour_manual(values=c("green", "blue"))+ 
+  labs(x="Original Loan-to-Value (LTV)") + ggtitle("Density Plot for LTV by Age and Delinquency Status")+ 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1));
+
+# Plotting DTI (10917 NA values)
+plot = ggplot(origFull, aes(x=ORIG_DTI, fill=default)) + geom_density(alpha=.3);
+plot+facet_grid(age~dbeforedef) + scale_colour_manual(values=c("green", "blue"))+ 
+  labs(x="Original Debt-to-Income Ratio (DTI)") + ggtitle("Density Plot for DTI by Age and Delinquency Status")+ 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1));
+
+# Plotting Loan amount
+plot = ggplot(origFull, aes(x=ORIG_UPB, fill=default)) + geom_density(alpha=.3);
+plot+facet_grid(age~dbeforedef) + scale_colour_manual(values=c("green", "blue"))+ 
+  labs(x="Original Loan Amount") + ggtitle("Density Plot for Loan Amount by Age and Delinquency Status")+ 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1));
+
+# Plotting Interest Rate
+plot = ggplot(origFull, aes(x=ORIG_INT, fill=default)) + geom_density(alpha=.3);
+plot+facet_grid(age~dbeforedef) + scale_colour_manual(values=c("green", "blue"))+ 
+  labs(x="Original Interest Rate (percent)") + 
+  ggtitle("Density Plot for Interest Rate by Age and Delinquency Status")+ 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1));
+
+# Other interesting things
+plot = ggplot(origFull, aes(x=monthsOld)) + geom_density(alpha=.3);
+plot+facet_grid(~default)+ labs(x="Age (Months)") + 
+  ggtitle("Density Plot for Age of Default/Non Default")+ 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1));
+
+plot = ggplot(origFull, aes(x=monthsOld, fill=default)) + geom_density(alpha=.3);
+plot+facet_grid(~dbeforedef) + scale_colour_manual(values=c("green", "blue"))+ 
+  labs(x="Age (Months)") + ggtitle("Density Plot for Age of Default/Non Default by Delinquency Status")+ 
+                theme(axis.text.x = element_text(angle = 45, hjust = 1));
+
+plot = ggplot(origFull, aes(x=monthsOld, fill=default)) + geom_density(alpha=.3);
+plot+facet_grid(age~dbeforedef) + scale_colour_manual(values=c("green", "blue"))+ 
+  labs(x="Age (Months)") + ggtitle("Density Plot for Age of Default/Non Default by Delinquency Status")+ 
+    theme(axis.text.x = element_text(angle = 45, hjust = 1));
+
+plot = ggplot(origFull, aes(x=monthsOld, fill=default)) + geom_density(alpha=.3);
+plot+facet_grid(~FICOBuck)+ scale_colour_manual(values=c("green", "blue")) + 
+  labs(x="Age (Months)") + ggtitle("Density Plot for Age of Default/Non Default by FICO bucket")+ 
+   theme(axis.text.x = element_text(angle = 45, hjust = 1));
+
+dev.off();
+
+
+# Plotting Term
+plot = ggplot(origFull, aes(x=ORIG_TERM, fill=default)) + geom_density(alpha=.3);
+plot+facet_grid(age~dbeforedef) + scale_colour_manual(values=c("green", "blue"))+ 
+  labs(x="Term (months)") + ggtitle("Density Plot for Loan Term by Age and Delinquency Status")+ 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1));
+
+plot = ggplot(origFull, aes(x=monthsOld, fill=default)) + geom_density(alpha=.3);
+plot+facet_grid(age~dbeforedef) + scale_colour_manual(values=c("green", "blue"))+ 
+  labs(x="Term (months)") + ggtitle("Density Plot for Loan Term by Age and Delinquency Status")+ 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1));
+
+## Time series stuff
+FICOseries = timeSeries %>% select(endDate, FICObuck1, FICObuck2,FICObuck3,FICObuck4,FICObuck5, FICObuck6);
+FICO_melt = melt(FICOseries,"endDate");
+FICOplot1= ggplot(FICO_melt,aes(x=endDate,y=value,group=variable,color=variable)) + 
+  geom_line() + scale_x_date(breaks = "7 month", labels = date_format("%b-%Y")) + labs(x="Date of Loan Termination", y="Proportion of Defaulted Loans") + 
+  theme(legend.title = element_text(colour="chocolate", size=16, face="bold"), 
+        plot.title = element_text(size=16, face="bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1))+ ggtitle("Proportion of Loan Defaults by FICO Group")+
+  scale_color_discrete(name="FICO Group", labels = c("<520","520-579", "580-619", "620-659", "660-699",">700"))
+
+FICOseries = timeSeries %>% select(endDate,FICObuck3,FICObuck4,FICObuck5, FICObuck6);
+FICO_melt = melt(FICOseries,"endDate");
+FICOplot3 = ggplot(FICO_melt,aes(x=endDate,y=value,group=variable,color=variable)) + 
+  geom_line() + scale_x_date(breaks = "7 month", labels = date_format("%b-%Y")) + 
+  labs(x="Date of Loan Termination", y="Proportion of Defaulted Loans") + 
+  theme(legend.title = element_text(colour="chocolate", size=16, face="bold"), ggsave(FICOplot1, file = "FICO1.pdf", scale = 1);
+        plot.title = element_text(size=16, face="bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1))+ ggtitle("Proportion of Loan Defaults by FICO Group") + 
+  scale_color_discrete(name="FICO Group", labels = c("580-619", "620-659", "660-699",">700"))
+
+FICOseries = timeSeries %>% select(endDate, FICObuck2,FICObuck3,FICObuck4,FICObuck5, FICObuck6);
+FICO_melt = melt(FICOseries,"endDate");
+FICOplot2=ggplot(FICO_melt,aes(x=endDate,y=value,group=variable,color=variable)) + 
+  geom_line() + scale_x_date(breaks = "7 month", labels = date_format("%b-%Y")) + labs(x="Date of Loan Termination", y="Proportion of Defaulted Loans") + 
+  theme(legend.title = element_text(colour="chocolate", size=16, face="bold"), 
+        plot.title = element_text(size=16, face="bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1))+ ggtitle("Proportion of Loan Defaults by FICO Group")+
+  scale_color_discrete(name="FICO Group", labels = c("520-579", "580-619", "620-659", "660-699",">700"))
+
+DPDseries = timeSeries %>% select(endDate,DPD1,DPD2,DPD3,DPD4);
+DPD_melt = melt(DPDseries,"endDate");
+DPDPlot = ggplot(DPD_melt,aes(x=endDate,y=value,group=variable,color=variable)) + 
+  geom_line() + scale_x_date(breaks = "7 month", labels = date_format("%b-%Y")) + 
+  labs(x="Date of Loan Termination", y="Proportion of Defaulted Loans") + 
+  theme(legend.title = element_text(colour="chocolate", size=16, face="bold"), 
+        plot.title = element_text(size=16, face="bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1))+ ggtitle("Proportion of Loan Defaults by Delinquency Status")+
+  scale_color_discrete(name="Loan Delinquency", labels = c("30-59 Days Past Due",
+                                                     "60-89 Days Past Due", "90-150 Days Past Due", 
+                                                     "150+ Days Past Due"))
+
+AGEseries = timeSeries %>% select(endDate, Age0, Age1);
+AGE_melt = melt(AGEseries,"endDate");
+agePlot = ggplot(AGE_melt,aes(x=endDate,y=value,group=variable,color=variable)) + 
+  geom_line() + scale_x_date(breaks = "7 month", labels = date_format("%b-%Y")) + 
+  labs(x="Date of Loan Termination", y="Proportion of Defaulted Loans") + 
+  theme(legend.title = element_text(colour="chocolate", size=16, face="bold"), 
+        plot.title = element_text(size=16, face="bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1))+ ggtitle("Proportion of Loan Defaults by Loan Age")+
+  scale_color_discrete(name="Loan Age", labels = c("< 1 Yr", "> 1 Yr"))
+
+ggsave(agePlot, file = "age.pdf", scale = 1);
+ggsave(FICOplot1, file = "FICO1.pdf", scale = 1.5);
+ggsave(FICOplot2, file = "FICO2.pdf", scale = 1.5);
+ggsave(FICOplot3, file = "FICO3.pdf", scale = 1.5);
+ggsave(DPDPlot, file = "DPD.pdf", scale = 1.5);
+dev.off();
+## Number of defaulted loans for each bucket
+
+# Numbers in the "Age" bucket.
+ageDefTable = table(origFull$default,origFull$age);
+agePropTable = round(prop.table(ageDefTable,2)*100, digits=2);
+
+# Numbers in the "Delinquency" buckets
+delFreqTable = table(origFull$age, origFull$dbeforedef);
+delDEFFreqTable = table(subset(origFull$age,origFull$default == "Default"),
+                        subset(origFull$dbeforedef,origFull$default == "Default"));
+delPropTable = round(delDEFFreqTable/delFreqTable*100, digits=2);
+
+# Numbers in the "FICO" buckets
+FICOFreqTable = table(origFull$age, origFull$FICOBuck);
+colnames(FICOFreqTable) = c("<520","520-579", "580-619", "620-659", "660-699",">700");
+FICODEFFreqTable = table(subset(origFull$age,origFull$default == "Default"),
+                         subset(origFull$FICOBuck,origFull$default == "Default"));
+FICOPropTable = round(FICODEFFreqTable/FICOFreqTable*100, digits=2);
+colnames(FICOPropTable) = c("<520","520-579", "580-619", "620-659", "660-699",">700");
+
+## Writing tables to pdf
+
+# Creating grobs for grid arrange
+agedefGrob = tableGrob(ageDefTable)
+agePropGrob = tableGrob(agePropTable);
+
+delFreqGrob = tableGrob(delFreqTable);
+delPropGrob = tableGrob(delPropTable);
+
+FICOFreqGrob = tableGrob(FICOFreqTable);
+FICOPropGrob = tableGrob(FICOPropTable);
+
+ageTables = grid.arrange(agedefGrob, agePropGrob, nrow = 1, ncol = 2,
+                         heights=unit(0.8, "npc"),top = "Tables of Frequency and Percentage Defaulted Loans by Loan Age");
+
+FICOTables = grid.arrange(FICOFreqGrob, FICOPropGrob, 
+                              top = "Total Loans and Percent Default Rates for Loan Age by FICO Score Groups", ncol=2, nrow=1);
+
+delTables = grid.arrange(delFreqGrob, delPropGrob, ncol = 2, nrow = 1,
+                              top = "Total Loans and Percent Default Rates for Loan Age by Delinquency Groups",
+                             heights=unit(0.8, "npc"));
+
+grid.arrange(ageTables,FICOTables, delTables);
+
