@@ -1,0 +1,203 @@
+library(caret)
+library(doMC)
+library(doParallel)
+library(plyr)
+library(dplyr)
+library(DMwR)
+library(MLmetrics)
+library(lift)
+library(ROCR)
+
+setwd("Data to Test");
+
+cl <- makePSOCKcluster(detectCores()-1)
+clusterEvalQ(cl, library(foreach))
+registerDoParallel(cl)
+
+start = 1;
+savefile = "test1.csv"
+end = start+15;
+
+joeyLift = function (predicted, labels) 
+{
+  if (is.factor(labels)) 
+    labels <- as.integer(as.character(labels))
+  lift <- cbind(predicted, labels)
+  lift <- lift[order(-lift[, 1]), ]
+  lift <- as.numeric(mean(lift[1:round(nrow(lift)/20, 0), 2])/mean(lift[, 
+                                                                        2]))
+  round(lift, digits = 3)
+}
+
+testForest.oversampled = function(data){
+  ######## Remove near zero variance
+  NZV = nearZeroVar(data, saveMetrics = T)
+  statusInd = which(colnames(data) == "STATUS")
+  NZV$nzv[statusInd] = FALSE
+  data = data[,!NZV$nzv]
+  ########
+  
+  ######## Remove variables not used
+  data$CUST_ID = NULL
+  ########
+  
+  ######## Remove columns with majority NA values
+  data = data[lapply(data, function(x) sum(is.na(x)) / length(x)) < 0.4]
+  ########
+  
+  ######## Create data partition
+  inTrainSTATUS = createDataPartition(y=data$STATUS, p=0.6, list=F)
+  trainingSTATUS = data[inTrainSTATUS,];
+  testingSTATUS = data[-inTrainSTATUS, ];
+  ########
+  
+  ######## Oversample with 50/50 split
+  trainingSTATUS <- SMOTE(STATUS ~ ., trainingSTATUS, 
+                          perc.over = 100, perc.under=200)
+  ########
+  
+  ######## Run model
+  ctrl <- trainControl(summaryFunction = prSummary,
+                       classProbs = TRUE)
+  
+  statusTrainInd = which(colnames(trainingSTATUS) == "STATUS")
+  modFitSTATUS1 = train(x=trainingSTATUS[,-statusTrainInd], y=trainingSTATUS[,statusTrainInd],
+                        method = "adaboost", trControl = ctrl)
+  ########
+  
+  ######## Setting up performance measures
+  pred = predict(modFitSTATUS1, testingSTATUS);
+  predScores = predict(modFitSTATUS1, testingSTATUS, type = "prob")[,"WON"]
+  conf = confusionMatrix(pred, testingSTATUS$STATUS, positive = "WON")
+  confOverall = as.data.frame(conf$overall)
+  confClass = as.data.frame(conf$byClass)
+  confTable = conf$table
+  ########
+  
+  ######## Correct WON as proportion of total, kappa, 
+  ######## accuracy, specificity, sensitivity, auc, cumulative lift
+  cumlift = joeyLift(predScores, as.numeric(testingSTATUS$STATUS)-1)
+  precision = confTable[1,1]/(confTable[1,1]+confTable[1,2])
+  recall = confTable[1,1]/(confTable[1,1]+confTable[2,2]);
+  F1 = 2*(recall*precision)/(recall+precision)
+  kappa = confOverall[2,]
+  accuracy = as.matrix(conf$overall)[1,1]
+  spec = confClass[2,]
+  sens = confClass[1,]
+  ########
+  
+  # print(conf);
+  # print(varImp(modFitSTATUS1));
+  
+  ######## Give me the nectar
+  finalPerf = as.matrix(cbind(precision, recall, 
+                              cumlift, accuracy, kappa, 
+                              spec, sens))
+  return(finalPerf)
+  ########
+}
+
+testForest = function(data){
+  
+  ######## Remove near zero variance
+  NZV = nearZeroVar(data, saveMetrics = T)
+  statusInd = which(colnames(data) == "STATUS")
+  NZV$nzv[statusInd] = FALSE
+  data = data[,!NZV$nzv]
+  ########
+  
+  ######## Remove variables not used
+  data$CUST_ID = NULL
+  ########
+  
+  ######## Remove columns with majority NA values
+  data = data[lapply(data, function(x) sum(is.na(x)) / length(x)) < 0.4]
+  ########
+  
+  ######## Create data partition
+  inTrainSTATUS = createDataPartition(y=data$STATUS, p=0.6, list=F)
+  trainingSTATUS = data[inTrainSTATUS,];
+  testingSTATUS = data[-inTrainSTATUS, ];
+  ########
+  
+  ######## Run model
+  ctrl <- trainControl(summaryFunction = prSummary,
+                       classProbs = TRUE)
+  
+  statusTrainInd = which(colnames(trainingSTATUS) == "STATUS")
+  modFitSTATUS1 = train(x=trainingSTATUS[,-statusTrainInd], y=trainingSTATUS[,statusTrainInd],
+                        method = "adaboost", trControl = ctrl)
+  ########
+  
+  ######## Setting up performance measures
+  pred = predict(modFitSTATUS1, testingSTATUS);
+  predScores = predict(modFitSTATUS1, testingSTATUS, type = "prob")[,"WON"]
+  conf = confusionMatrix(pred, testingSTATUS$STATUS, positive = "WON")
+  confOverall = as.data.frame(conf$overall)
+  confClass = as.data.frame(conf$byClass)
+  confTable = conf$table
+  ########
+  
+  ######## cumulative lift, AUC and AUCSD, precision, recall, F1 
+  ######## kappa, accuracy, specificity, sensitivity
+  cumlift = joeyLift(predScores, as.numeric(testingSTATUS$STATUS)-1)
+  finalmodelRow = as.numeric(rownames(modFitSTATUS1$bestTune))
+  precision = confTable[1,1]/(confTable[1,1]+confTable[1,2])
+  recall = confTable[1,1]/(confTable[1,1]+confTable[2,2]);
+  F1 = 2*(recall*precision)/(recall+precision)
+  kappa = confOverall[2,]
+  accuracy = as.matrix(conf$overall)[1,1]
+  spec = confClass[2,]
+  sens = confClass[1,]
+  ########
+  
+  # print(conf);
+  # print(varImp(modFitSTATUS1));
+  
+  ######## Give me the nectar
+  finalPerf = as.matrix(cbind(precision, recall, 
+                              cumlift, accuracy, kappa, 
+                              spec, sens))
+  return(finalPerf)
+  ########
+}
+
+testFiles = function(){
+  testAccuracy = NULL;
+  cutoff.p.wins = 0.09;
+  
+  ## Want to parallelize this part
+  for(readIter in start:end){
+    tryCatch({
+      oversample = 0;
+      
+      # Read it
+      file = paste(readIter,".csv",sep="")
+      srcData = read.csv(file);
+      srcData$STATUS = relevel(srcData$STATUS, ref = "WON")
+      
+      # Oversample?
+      if(mean(as.numeric(srcData$STATUS) - 1) < cutoff.p.wins){
+        oversample = 1;
+      }
+      print(paste("Testing model number", readIter, "oversampling set to", oversample))
+      #Feed it to function to get performance measures
+      
+      if(oversample){
+        performance = testForest.oversampled(srcData)
+      }
+      else{
+        performance = testForest(srcData)
+      }
+      fileNo = as.matrix(readIter);
+      osFlag = as.matrix(oversample)
+      colnames(osFlag) = "Oversample?"
+      colnames(fileNo) = "File Number"
+      performance = cbind(performance, fileNo, osFlag)
+      testAccuracy = rbind(testAccuracy, performance)
+    },error=function(e){cat("ERROR :",conditionMessage(e), "\n")})
+  }
+  return(testAccuracy)
+}
+test = suppressWarnings(testFiles())
+write.csv(test, file = savefile)
