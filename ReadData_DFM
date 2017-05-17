@@ -35,7 +35,7 @@ flagFunction = function(balCheck, MTM, A_UPB, DELINQ, AGE) {
   else if(as.integer(tail(DELINQ,1)) == 1){
     result[3] = 1;
   }
-  #If the loan is 60-89 DPD, flag 2
+  #If the loan is 60-89 DPD, flag 2.
   else if(as.integer(tail(DELINQ,1)) == 2){
     result[3] = 2;
   }
