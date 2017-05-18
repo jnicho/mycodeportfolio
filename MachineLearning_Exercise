@@ -1,0 +1,38 @@
+library(caret);
+
+cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+
+training = read.csv("pml-training.csv")
+training = training[,-1] #Remove ID Column
+testing = read.csv("pml-testing.csv")
+testing = testing[,-1] #Remove ID Column
+
+# Removing variables with Near Zero Variance
+NZV = nearZeroVar(training, saveMetrics = T)
+training = training[,!NZV$nzv]
+testing = testing[,!NZV$nzv]
+
+# Removing columns with a lot of NA values
+training = training[lapply(training, function(x) sum(is.na(x)) / length(x)) < 0.4]
+keep = colnames(training);
+testKeep = colnames(testing) %in% keep
+testing = testing[,testKeep]
+
+# Creating training and validation subsets
+inTrain = createDataPartition(y=training$classe, p=0.6, list=F)
+subTrain = training[inTrain,];
+subTest = training[-inTrain, ];
+
+options = trainControl(method = "cv", number = 10, allowParallel = T)
+
+# Model 1: Boosting
+mod_gbm = train(classe ~ . ,data = subTrain, method = "gbm")
+confusionMatrix(subTest$classe, predict(mod_gbm, subTest)) #Accuracy: 99.68
+
+# Model 2: Random Forests
+mod_rf = train(classe ~ ., data = subTrain, method = "rf", trControl = options)
+confusionMatrix(subTest$classe, predict(mod_rf, subTest)) #Accuracy: 99.94
+
+# Applying RF Model to testing set
+predict(mod_rf, testing, type = "raw")
