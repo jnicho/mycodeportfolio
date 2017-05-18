@@ -75,7 +75,7 @@ testForest.oversampled = function(data){
   ########
   
   ######## Correct WON as proportion of total, kappa, 
-  ######## accuracy, specificity, sensitivity, auc, cumulative lift
+  ######## accuracy, specificity, sensitivity, auc, cumulative lift.
   cumlift = joeyLift(predScores, as.numeric(testingSTATUS$STATUS)-1)
   precision = confTable[1,1]/(confTable[1,1]+confTable[1,2])
   recall = confTable[1,1]/(confTable[1,1]+confTable[2,2]);
