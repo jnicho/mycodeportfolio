@@ -1,0 +1,222 @@
+library(zoo);
+library(data.table);
+library(plyr);
+library(dplyr);
+library(speedglm)
+library(lubridate);
+library(ggplot2);
+library(reshape);
+library(scales);
+
+fullData = as.data.table(read.csv("full_data.csv", header = T, stringsAsFactors = F));
+
+#Model Prediction
+modelPredict = function(model, string, prop, newDF){
+  probs = predict(model, newdata = newDF, type="response");
+  if(max(probs) < prop){
+    stop("No successul predictions");
+  }
+  aic = round(model$aic, digits = 2);
+  logLik = round(model$logLik, digits=2);
+  probs[probs >= prop] = 1;
+  probs[probs < prop] = 0;
+  defaultTable = as.data.frame(cbind(as.character(newDF$REP_PERIOD), as.integer(newDF$default), 
+                                     as.integer(probs)));
+  defaultTable$V1 = as.character(defaultTable$V1);
+  
+  levels(defaultTable$V2) = c("0","1");
+  dateGroups = defaultTable %>% group_by(V1) %>% 
+    summarize(yProp = mean(as.integer(V2)-1), yhatProp = mean(as.integer(V3)-1))
+  dateGroups$pDiff = dateGroups$yProp-dateGroups$yhatProp;
+  medianDiff = median(dateGroups$pDiff);
+  
+  dateGroups$V1 = as.yearmon(dateGroups$V1)
+  dateGroups = dateGroups[order(dateGroups$V1),];
+  dateGroups$V1 = as.Date(dateGroups$V1);
+  
+  dateGroups = as.data.frame(dateGroups)
+  prop_series = dateGroups[,c("V1","yProp", "yhatProp")]
+  prop_melt = melt(prop_series,"V1");
+  propPlot=ggplot(prop_melt,aes(x=V1,y=value,group=variable,color=variable)) + 
+    geom_line() + scale_x_date(breaks = "7 month", labels = date_format("%b-%Y")) + 
+    labs(x="Date", y="Proportion of Defaulted Loans") + 
+    theme(legend.title = element_text(colour="chocolate", size=16, face="bold"), 
+          plot.title = element_text(size=16, face="bold"),
+          axis.text.x = element_text(angle = 45, hjust = 1))+ 
+    ggtitle(bquote(atop(.("Real and Predicted Proportion of Default"),
+                        atop(italic(.(paste("For", string, "Model" 
+                        ))),atop(.(paste("Median Difference:", medianDiff,
+                                         "| AIC:", aic, 
+                                         "| Log-Likelihood:", logLik))), ""))))+
+    scale_color_discrete(name="Proportion", labels = c("p", "p-hat"))
+  
+  ggsave(propPlot, file = paste0(string,"propPlot.pdf"), scale = 1.5);
+  
+  errorRates = defaultTable %>% group_by(V1) %>% 
+    summarize(error = mean((as.integer(V2)-1)-(as.integer(V3)-1)))
+  errorRates$V1 = as.yearmon(errorRates$V1)
+  errorRates = errorRates[order(errorRates$V1),];
+  errorRates$V1 = as.Date(errorRates$V1);
+  errorRates = as.data.frame(errorRates);
+  aveErrorRate = round(mean(errorRates$error), digits = 4);
+  
+  error_melt = melt(errorRates,"V1");
+  errorPlot=ggplot(error_melt,aes(x=V1,y=value,group=variable,color=variable)) + 
+    geom_line() + scale_x_date(breaks = "7 month", labels = date_format("%b-%Y")) + 
+    labs(x="Date", y="Error Rate") + 
+    theme(legend.title = element_text(colour="chocolate", size=16, face="bold"), 
+          plot.title = element_text(size=16, face="bold"),
+          axis.text.x = element_text(angle = 45, hjust = 1))+ 
+    ggtitle(bquote(atop(.("Non-cross Validated Error Rate"),
+                        atop(italic(.(paste("For", string, "Model"))), 
+                             atop(.(paste("Average Error Rate:", aveErrorRate,
+                                          "| AIC:", aic, 
+                                          "| Log-Likelihood:", logLik))), ""))))+
+    scale_color_discrete(name="Difference", labels = "Error Rate")
+  
+  ggsave(errorPlot, file = paste0(string,"errorPlot.pdf"), scale = 1.5);
+}
+
+## Changing dates if they are still broken and decimal for some reason
+
+
+## Removing NA values, converting to factors, and cleaning data
+fullData = fullData[!is.na(fullData$age),];
+fullData = fullData[!is.na(fullData$ACTUAL_UPB),];
+fullData = fullData[!is.na(fullData$MI.),];
+fullData = fullData[!is.na(fullData$dbeforedef),];
+fullData = fullData[!is.na(fullData$FICOBuck),];
+fullData = fullData[!is.na(fullData$ORIG_LTV),];
+fullData = fullData[!is.na(fullData$ORIG_DTI),];
+fullData = fullData[!is.na(fullData$ORIG_UPB),];
+fullData = fullData[!is.na(fullData$ORIG_INT),];
+fullData = fullData[!is.na(fullData$default),];
+fullData = fullData[!is.na(fullData$X1ST.TIMER_FLAG),];
+fullData = fullData[(fullData$X1ST.TIMER_FLAG)!="",];
+fullData$X1ST.TIMER_FLAG[fullData$X1ST.TIMER_FLAG == "Y"] = "Yes";
+fullData$X1ST.TIMER_FLAG[fullData$X1ST.TIMER_FLAG == "N"] = "No";
+fullData = fullData[!is.na(fullData$MOD_FLAG),];
+fullData$MOD_FLAG[fullData$MOD_FLAG == ""] = "Not Modified";
+fullData$MOD_FLAG[fullData$MOD_FLAG == "Y"] = "Modified";
+fullData = fullData[!is.na(fullData$REPO_FLAG),];
+fullData$REPO_FLAG[fullData$REPO_FLAG == ""] = "Not Applicable";
+fullData$REPO_FLAG[fullData$REPO_FLAG == "N"] = "Not Repurchased";
+fullData$REPO_FLAG[fullData$REPO_FLAG == "Y"] = "Repurchased";
+fullData = fullData[!is.na(fullData$NUM_BORROW),];
+fullData$NUM_BORROW = as.character(fullData$NUM_BORROW);
+fullData$NUM_BORROW[fullData$NUM_BORROW == "1"] = "1 Borrower";
+fullData$NUM_BORROW[fullData$NUM_BORROW == "2"] = "Multiple Borrowers";
+fullData = fullData[fullData$dbeforedef != "R",];
+fullData = fullData[fullData$FICOBuck != 0,]
+
+
+fullData$default = as.factor(fullData$default);
+fullData$REPO_FLAG = as.factor(fullData$REPO_FLAG);
+fullData$X1ST.TIMER_FLAG = as.factor(fullData$X1ST.TIMER_FLAG);
+fullData$NUM_BORROW = as.factor(fullData$NUM_BORROW);
+fullData$MOD_FLAG = as.factor(fullData$MOD_FLAG);
+fullData$age = as.factor(fullData$age);
+fullData$dbeforedef = as.factor(fullData$dbeforedef);
+fullData$FICOBuck = as.factor(fullData$FICOBuck);
+fullData$PURPOSE = as.factor(fullData$PURPOSE);
+fullData$REP_PERIOD = as.factor(fullData$REP_PERIOD);
+fullData$FIRST_PAY_DATE = as.factor(fullData$FIRST_PAY_DATE);
+
+levels(fullData$default) = c("0", "1");
+levels(fullData$age) = c("< 1Yr", "> 1Yr");
+levels(fullData$dbeforedef) = c("R","0-29 DPD", "30-59 DPD","60-89 DPD", "90+ DPD", "90+ DPD");
+levels(fullData$FICOBuck) = c("<650","650-699", "700-749", ">750");
+
+##Subsetting "young" and "old" data
+youngFull = subset(fullData, fullData$age == "< 1Yr");
+youngDefProp = mean(as.integer(youngFull$default)-1);
+
+oldFull = subset(fullData, fullData$age == "> 1Yr");
+
+old0_29 = subset(oldFull, as.character(oldFull$dbeforedef) == "0-29 DPD");
+Prop0_29Def = mean(as.integer(old0_29$default)-1);
+old30_59 = subset(oldFull, as.character(oldFull$dbeforedef) == "30-59 DPD");
+Prop30_59Def = mean(as.integer(old30_59$default)-1);
+old60_89 = subset(oldFull, as.character(oldFull$dbeforedef) == "60-89 DPD");
+Prop60_89Def = mean(as.integer(old60_89$default)-1);
+old90_ = subset(oldFull, as.character(oldFull$dbeforedef) == "90+ DPD");
+Prop90_Def = mean(as.integer(old90_$default)-1);
+
+##Running regressions
+youngReg = speedglm(default~I(FICOBuck=="700-749")*ACTUAL_UPB+ I(X1ST.TIMER_FLAG=="Yes")+I(FICOBuck=="700-749")*ORIG_INT+UNRATEPCH+
+                      I(FICOBuck=="650-699")*ORIG_DTI+I(FICOBuck=="700-749")*ORIG_DTI+I(FICOBuck==">750")*ORIG_DTI+
+                      I(FICOBuck=="650-699")*monthsOld, 
+                        data = youngFull, family=binomial(link="logit"), na.action = na.fail);
+
+old0_29Reg = speedglm(default~I(FICOBuck==">750")*ACTUAL_UPB+ I(X1ST.TIMER_FLAG=="Yes")+
+                        I(NUM_BORROW=="Multiple Borrowers")+ORIG_INT+
+                        HPIPCH+I(FICOBuck=="650-699")*monthsOld+I(MOD_FLAG == "Modified"), 
+                      data = old0_29, family=binomial(link="logit"),na.action=na.omit);
+
+old30_59Reg = speedglm(default~I(FICOBuck==">750")*ACTUAL_UPB +I(FICOBuck=="650-699")*ACTUAL_UPB+I(FICOBuck=="700-749")*ACTUAL_UPB+
+                         I(X1ST.TIMER_FLAG=="Yes")+I(FICOBuck==">750")*ORIG_INT+I(FICOBuck==">750")*GDPPCH+
+                         I(FICOBuck=="650-699")*monthsOld+I(FICOBuck=="700-749")*monthsOld+I(FICOBuck==">750")*monthsOld, 
+                       data = old30_59, family=binomial(link="logit"),na.action=na.omit);
+
+old60_89Reg = speedglm(default~I(FICOBuck=="650-699")+I(FICOBuck==">750")+ I(FICOBuck=="700-749")*ACTUAL_UPB+ 
+                         I(X1ST.TIMER_FLAG=="Yes")+ORIG_INT+ORIG_LTV, 
+                       data = old60_89, family=binomial(link="logit"),na.action=na.omit);
+
+old90_Reg = speedglm(default~I(FICOBuck==">750")*ACTUAL_UPB +I(FICOBuck=="650-699")*ACTUAL_UPB+I(FICOBuck=="700-749")*ACTUAL_UPB
+                     + I(X1ST.TIMER_FLAG=="Yes")+ I(MOD_FLAG=="Not Modified")+
+                       I(FICOBuck==">750")*ORIG_INT +I(FICOBuck=="650-699")*ORIG_INT+I(FICOBuck=="700-749")*ORIG_INT+
+                       ORIG_DTI+monthsOld,data = old90_, family=binomial(link="logit"),
+                     na.action=na.omit);
+
+##Writing Coeffs
+write.csv(summary(youngReg)$coefficients, "youngReg.csv");
+write.csv(summary(old0_29Reg)$coefficients, "old0_29Reg.csv");
+write.csv(summary(old30_59Reg)$coefficients, "old30_59Reg.csv");
+write.csv(summary(old60_89Reg)$coefficients, "old60_89Reg.csv");
+write.csv(summary(old90_Reg)$coefficients, "old90_Reg.csv");
+
+
+table1 = table(youngFull$FICOBuck,youngFull$default)
+youngFullxtab = prop.table(table1,2)
+table5 = table(old0_29$FICOBuck,old0_29$default)
+old0_29xtab = prop.table(table5,2)
+table6 = table(old30_59$FICOBuck,old30_59$default)
+old30_59xtab = prop.table(table6, 2);
+table7 = table(old60_89$FICOBuck,old60_89$default)
+old60_89xtab = prop.table(table7, 2)
+table8 = table(old90_$FICOBuck,old90_$default)
+old90_xtab = prop.table(table8,2);
+
+##Writing xtab tables
+write.csv(youngFullxtab, "youngFullxtab.csv");
+write.csv(old0_29xtab, "old0_29xtab.csv");
+write.csv(old30_59xtab, "old30_59xtab.csv");
+write.csv(old60_89xtab, "old60_89xtab.csv");
+write.csv(old90_xtab, "old90_xtab.csv");
+
+modelPredict(youngReg,"Young",youngDefProp, youngFull);
+modelPredict(old0_29Reg,"Old0_29",Prop0_29Def, old0_29);
+modelPredict(old30_59Reg,"Old30_59",Prop30_59Def, old30_59);
+modelPredict(old60_89Reg,"Old60_89",Prop60_89Def, old60_89);
+modelPredict(old90_Reg,"Old90_",Prop90_Def, old90_);
+
+
+BucketTest = function(dataframe){
+  buckets = levels(dataframe$FICOBuck);
+  bucketLength = NULL; temp = c(NULL,NULL);
+  for(bucketIter in 1:length(buckets)){
+    test = subset(dataframe$default, as.character(dataframe$FICOBuck) == buckets[bucketIter])
+    bucketLength = length(test[test==1]);
+    info = cbind(bucketLength, buckets[bucketIter])
+    temp = rbind(c(info,temp));
+  }
+  return(temp);
+}
+
+youngTest = BucketTest(youngFull);
+old0_29test = BucketTest(old0_29);
+old30_59test = BucketTest(old30_59);
+old60_89test = BucketTest(old60_89);
+old90_test = BucketTest(old90_);
+
+bucketInfo = rbind(youngTest,old0_29test,old30_59test,old60_89test,old90_test)
